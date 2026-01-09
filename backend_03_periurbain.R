@@ -1,5 +1,5 @@
 # ==============================================================================
-# BACKEND 1 : PM2.5 (Périurbain) - VERSION PARALLÈLE (7 Cœurs)
+# BACKEND 3 : O3 (Périurbain) - VERSION PARALLÈLE (7 Cœurs)
 # ==============================================================================
 library(dplyr)
 library(lubridate)
@@ -10,8 +10,8 @@ library(future.apply)
 library(progressr)    
 
 INPUT_FILE  <- "mesure_horaire_view.csv"
-OUTPUT_FILE <- "data_shiny_pm25_periurbain.csv"
-SEUIL_ALERTE <- 25 # Seuil OMS (Moyenne 24h, utilisé ici en indicatif horaire)
+OUTPUT_FILE <- "data_shiny_o3_periurbain.csv"
+SEUIL_ALERTE <- 180 # Seuil d'information (Europe)
 
 # 1. CONFIGURATION DU PARALLÉLISME
 # --------------------------------
@@ -25,16 +25,17 @@ handlers(global = TRUE)
 handlers("txtprogressbar") 
 
 print(paste(">>> Mode PARALLÈLE activé sur", n_cores, "cœurs."))
-print(">>> Méthode : SARIMA(2,1,0) + GARCH")
+print(">>> Méthode : SARIMA(2,1,1) + GARCH")
 
 if (!file.exists(INPUT_FILE)) stop("Fichier source introuvable.")
 df <- read.csv(INPUT_FILE)
 
 # 2. PRÉPARATION
 # --------------
+# Note : On ne garde que la typologie "Périurbaine" validée pour l'O3
 df_traite <- df %>%
-  filter(nom_polluant == "PM2.5",
-         typologie %in% c("Périurbaine", "Rurale proche Zone Urbaine")) %>%
+  filter(nom_polluant == "O3",
+         typologie == "Périurbaine") %>% 
   mutate(date_fin = ymd_hms(date_fin, quiet = TRUE)) %>%
   filter(!is.na(date_fin))
 
@@ -59,9 +60,9 @@ process_station_worker <- function(station_name, data_full) {
   res <- tryCatch({
     ts_data <- ts(valeurs_impute, frequency = 24)
     
-    # --- MODÈLE PM2.5 : SARIMA(2,1,0)(0,1,1) ---
-    # C'est le modèle validé dans ton rapport (AR2 Gagnant)
-    fit_sarima <- Arima(ts_data, order = c(2, 1, 0), 
+    # --- MODÈLE OZONE : SARIMA(2,1,1)(0,1,1) ---
+    # C'est le "Candidat Mixte" qui a gagné le tournoi O3
+    fit_sarima <- Arima(ts_data, order = c(2, 1, 1), 
                         seasonal = list(order = c(0, 1, 1), period = 24))
     
     residus <- residuals(fit_sarima)
@@ -77,8 +78,8 @@ process_station_worker <- function(station_name, data_full) {
     
     data.frame(
       Station = station_name,
-      Polluant = "PM2.5",
-      Typologie = "Périurbain", # Simplification pour l'affichage
+      Polluant = "O3",
+      Typologie = df_s$typologie[1],
       Lat = df_s$y_wgs84[1],
       Lon = df_s$x_wgs84[1],
       Heure_Ref = last_time,
@@ -97,7 +98,7 @@ process_station_worker <- function(station_name, data_full) {
 # 4. EXÉCUTION AVEC BARRE DE PROGRESSION
 # ======================================
 n_total <- length(stations_actives)
-print(paste(">>> Démarrage du traitement pour", n_total, "stations PM2.5..."))
+print(paste(">>> Démarrage du traitement pour", n_total, "stations O3..."))
 
 with_progress({
   

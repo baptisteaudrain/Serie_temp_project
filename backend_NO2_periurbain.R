@@ -1,5 +1,5 @@
 # ==============================================================================
-# BACKEND 1 : PM2.5 (Périurbain) - VERSION PARALLÈLE (7 Cœurs)
+# BACKEND 2 : NO2 - VERSION PARALLÈLE (7 Cœurs) - PRÉCISION MAXIMALE
 # ==============================================================================
 library(dplyr)
 library(lubridate)
@@ -10,22 +10,23 @@ library(future.apply)
 library(progressr)    
 
 INPUT_FILE  <- "mesure_horaire_view.csv"
-OUTPUT_FILE <- "data_shiny_pm25_periurbain.csv"
-SEUIL_ALERTE <- 25 # Seuil OMS (Moyenne 24h, utilisé ici en indicatif horaire)
+OUTPUT_FILE <- "data_shiny_no2_periubain.csv"
+SEUIL_ALERTE <- 200
 
 # 1. CONFIGURATION DU PARALLÉLISME
 # --------------------------------
 n_cores <- parallel::detectCores() - 1
 if(n_cores < 1) n_cores <- 1
 
+# On configure les "workers" (les cœurs)
 plan(multisession, workers = n_cores)
 
-# Configuration de la barre de progression
+# Configuration de la barre de progression pour qu'elle soit visible
 handlers(global = TRUE)
-handlers("txtprogressbar") 
+handlers("txtprogressbar") # Affiche une barre [=====>   ] dans la console
 
 print(paste(">>> Mode PARALLÈLE activé sur", n_cores, "cœurs."))
-print(">>> Méthode : SARIMA(2,1,0) + GARCH")
+print(">>> Méthode : SARIMA (Standard) + GARCH (solnp)")
 
 if (!file.exists(INPUT_FILE)) stop("Fichier source introuvable.")
 df <- read.csv(INPUT_FILE)
@@ -33,8 +34,8 @@ df <- read.csv(INPUT_FILE)
 # 2. PRÉPARATION
 # --------------
 df_traite <- df %>%
-  filter(nom_polluant == "PM2.5",
-         typologie %in% c("Périurbaine", "Rurale proche Zone Urbaine")) %>%
+  filter(nom_polluant == "NO2",
+         typologie %in% c("Urbaine", "Périurbaine", "Rurale proche Zone Urbaine")) %>%
   mutate(date_fin = ymd_hms(date_fin, quiet = TRUE)) %>%
   filter(!is.na(date_fin))
 
@@ -44,8 +45,8 @@ stations_actives <- df_traite %>%
   filter(derniere_mesure >= (max(df_traite$date_fin, na.rm=T) - days(3))) %>%
   pull(nom_station)
 
-# 3. FONCTION DE TRAITEMENT
-# -------------------------
+# 3. FONCTION DE TRAITEMENT (Précision Maximale)
+# ----------------------------------------------
 process_station_worker <- function(station_name, data_full) {
   
   df_s <- data_full %>% filter(nom_station == station_name) %>% arrange(date_fin)
@@ -59,14 +60,14 @@ process_station_worker <- function(station_name, data_full) {
   res <- tryCatch({
     ts_data <- ts(valeurs_impute, frequency = 24)
     
-    # --- MODÈLE PM2.5 : SARIMA(2,1,0)(0,1,1) ---
-    # C'est le modèle validé dans ton rapport (AR2 Gagnant)
-    fit_sarima <- Arima(ts_data, order = c(2, 1, 0), 
+    # RETOUR AU STANDARD (Plus lent mais plus précis)
+    # On enlève method="CSS" pour laisser Arima faire son optimisation complète
+    fit_sarima <- Arima(ts_data, order = c(2, 1, 2), 
                         seasonal = list(order = c(0, 1, 1), period = 24))
     
     residus <- residuals(fit_sarima)
     
-    # GARCH(1,1) Standard
+    # RETOUR AU SOLVER STANDARD (solnp)
     spec_garch <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
                              mean.model = list(armaOrder = c(0, 0), include.mean = FALSE))
     fit_garch <- ugarchfit(spec = spec_garch, data = residus, solver = "solnp")
@@ -77,8 +78,8 @@ process_station_worker <- function(station_name, data_full) {
     
     data.frame(
       Station = station_name,
-      Polluant = "PM2.5",
-      Typologie = "Périurbain", # Simplification pour l'affichage
+      Polluant = "NO2",
+      Typologie = df_s$typologie[1],
       Lat = df_s$y_wgs84[1],
       Lon = df_s$x_wgs84[1],
       Heure_Ref = last_time,
@@ -97,18 +98,23 @@ process_station_worker <- function(station_name, data_full) {
 # 4. EXÉCUTION AVEC BARRE DE PROGRESSION
 # ======================================
 n_total <- length(stations_actives)
-print(paste(">>> Démarrage du traitement pour", n_total, "stations PM2.5..."))
+print(paste(">>> Démarrage du traitement pour", n_total, "stations..."))
 
 with_progress({
   
+  # On initialise la barre sur le nombre total de stations
   p <- progressor(along = stations_actives)
   
   resultats_list <- future_lapply(stations_actives, function(st) {
     
+    # Calcul
     res <- process_station_worker(st, df_traite)
-    p(sprintf("Station : %s", st))
-    return(res)
     
+    # Mise à jour de la barre : On envoie un signal pour dire "1 de fait !"
+    # sprintf permet d'afficher le nom de la station en cours de traitement dans la barre
+    p(sprintf("Station : %s", st))
+    
+    return(res)
   }, future.seed = TRUE)
 })
 
