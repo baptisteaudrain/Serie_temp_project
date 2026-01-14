@@ -95,7 +95,7 @@ ggtsdisplay(ts_train, lag.max=60, main="GRAPHIQUE B : Série Brute O3 (ACF/PACF)
 # ETAPE 3-Bis : CHOIX DE LA DIFFÉRENCIATION (OZONE)
 # ==============================================================================
 library(forecast)
-library(ggplot2)
+library(ggplot2)12
 
 print("--- COMPARAISON DES DIFFÉRENCIATIONS (O3) ---")
 
