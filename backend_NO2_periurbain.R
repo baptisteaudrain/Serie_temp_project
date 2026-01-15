@@ -11,7 +11,7 @@ library(future.apply)
 library(progressr)    
 
 INPUT_FILE  <- "mesure_horaire_view.csv"
-OUTPUT_FILE <- "data_shiny_no2.csv"
+OUTPUT_FILE <- "data_shiny_no2_periurbain.csv"
 SEUIL_ALERTE <- 200 # Seuil horaire (Europe)
 
 # --- CONFIGURATION TIME MACHINE ---
@@ -40,7 +40,7 @@ df <- read.csv(INPUT_FILE)
 # Pour le NO2, on garde Urbain + Périurbain + Rural proche (Trafic impactant)
 df_traite <- df %>%
   filter(nom_polluant == "NO2") %>%
-  filter(typologie %in% c("Urbaine", "Périurbaine", "Rurale proche Zone Urbaine")) %>%
+  filter(typologie %in% c("Périurbaine", "Rurale proche Zone Urbaine")) %>%
   mutate(date_fin = ymd_hms(date_fin, quiet = TRUE)) %>%
   filter(!is.na(date_fin)) %>%
   
