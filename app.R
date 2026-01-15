@@ -1,7 +1,7 @@
 rm(list = ls())
 
 # ==============================================================================
-# APPLICATION SHINY : SURVEILLANCE AVANCÉE (SEUILS CORRIGÉS)
+# APPLICATION SHINY : SURVEILLANCE AVANCÉE (FILTRE STATION AJOUTÉ)
 # ==============================================================================
 library(shiny)
 library(leaflet)
@@ -16,12 +16,11 @@ library(jsonlite)
 # 1. CONFIGURATION & SÉCURITÉS
 # ==============================================================================
 
-# --- DÉFINITION STRICTE DES SEUILS (Normes) ---
-# Ces valeurs servent à recalculer le statut en temps réel
+# --- DÉFINITION STRICTE DES SEUILS ---
 THRESHOLDS <- list(
-  "PM2.5" = 25,  # Seuil OMS (Moyenne jour, utilisé ici en horaire indicatif)
-  "NO2"   = 200, # Seuil d'alerte horaire
-  "O3"    = 120  # Seuil d'information (8h, utilisé ici en horaire indicatif)
+  "PM2.5" = 25, 
+  "NO2"   = 200,
+  "O3"    = 120 
 )
 
 # --- DOUBLE SÉCURITÉ GEOJSON ---
@@ -37,7 +36,6 @@ try({
 
 # --- FONCTION DE CHARGEMENT SÉCURISÉE ---
 load_data <- function(filename) {
-  # Structure vide stricte pour éviter les crashs
   empty_df <- data.frame(
     Station = character(), Polluant = character(), Typologie = character(),
     Lat = double(), Lon = double(), Heure_Ref = as.POSIXct(character()),
@@ -73,7 +71,7 @@ data_all <- list(
                rur  = load_data("data_shiny_o3_rurale.csv"))
 )
 
-# Fonction Time Machine (Dernière observation connue)
+# Fonction Time Machine
 get_last_obs_time <- function() {
   all_dfs <- unlist(unname(data_all), recursive = FALSE)
   last_times <- sapply(all_dfs, function(df) if(nrow(df) > 0) max(df$Heure_Ref) else as.POSIXct(NA))
@@ -89,17 +87,19 @@ REF_TIME_STR <- format(get_last_obs_time(), "%d/%m/%Y à %H:00")
 ui <- fluidPage(
   theme = bs_theme(version = 5, bootswatch = "flatly"),
   
-  # En-tête
+  
   div(class = "bg-primary text-white p-3 mb-3 rounded",
-      h2(style = "margin: 0;", "🌤️ Météo de l'Air - Occitanie"),
+      # REMPLACEZ LE SOLEIL ICI :
+      h2(style = "margin: 0;", "🌫️ Météo de l'Air - Occitanie"), 
       p(style = "margin: 0; opacity: 0.8;", 
         paste0("Prévisions générées à partir des observations du : ", REF_TIME_STR))
   ),
   
   sidebarLayout(
     sidebarPanel(
+      # BLOC 1 : SÉLECTION GLOBALE
       div(style="background:#f8f9fa; padding:15px; border-left:5px solid #2c3e50; margin-bottom:15px;",
-          h4("1. Sélection"),
+          h4("1. Sélection Données"),
           radioButtons("map_polluant", "Polluant :", 
                        choices = list("Particules (PM2.5)" = "PM2.5", 
                                       "Dioxyde d'Azote (NO2)" = "NO2", 
@@ -109,14 +109,26 @@ ui <- fluidPage(
                              selected = c("peri"))
       ),
       
+      # BLOC 2 : FILTRE TABLEAU (NOUVEAU)
+      div(style="background:#eef2f3; padding:15px; border-left:5px solid #16a085; margin-bottom:15px;",
+          h4("2. Filtre Tableau"),
+          p(style="font-size:0.9em; color:#7f8c8d;", "Sélectionnez une ou plusieurs stations pour filtrer le tableau récapitulatif."),
+          # Liste déroulante vide au départ, remplie par le serveur
+          selectizeInput("filter_stations", "Choisir les stations :", 
+                         choices = NULL, 
+                         multiple = TRUE, 
+                         options = list(placeholder = 'Toutes les stations...'))
+      ),
+      
+      # BLOC 3 : NAVIGATION
       div(style="background:#f8f9fa; padding:15px; border-left:5px solid #2c3e50; margin-bottom:15px;",
-          h4("2. Navigation"),
+          h4("3. Navigation Carte"),
           p("Glissez pour voir l'évolution."),
           sliderInput("select_h", "Échéance :", min = 1, max = 48, value = 1, post = "h"),
           uiOutput("current_time_display")
       ),
       
-      # LÉGENDE DYNAMIQUE AVEC SEUILS AFFICHÉS
+      # LÉGENDE DYNAMIQUE
       uiOutput("dynamic_legend"),
       width = 3
     ),
@@ -128,7 +140,7 @@ ui <- fluidPage(
       div(class = "card",
           div(class = "card-header bg-secondary text-white", h4(style="margin:0;", "📋 Synthèse des Alertes (48h)")),
           div(class = "card-body",
-              p("Ce tableau regroupe les plages horaires où un risque de dépassement est détecté."),
+              p("Ce tableau regroupe les plages horaires où un risque de dépassement est détecté pour les stations sélectionnées."),
               DTOutput("tab_alertes_grouped")
           )
       ),
@@ -142,21 +154,18 @@ ui <- fluidPage(
 # ==============================================================================
 server <- function(input, output, session) {
   
-  # --- FUSION ET RECALCUL DES STATUTS (CŒUR DE LA LOGIQUE) ---
+  # --- FUSION ET RECALCUL DES STATUTS ---
   filtered_full_data <- reactive({
     req(input$map_polluant, input$select_typo)
     
-    # 1. Récupération des données brutes
     dfs <- data_all[[input$map_polluant]][input$select_typo]
     df_combined <- bind_rows(dfs)
     
     if(nrow(df_combined) == 0) return(df_combined)
     
-    # 2. Récupération du seuil spécifique
     limit_val <- THRESHOLDS[[input$map_polluant]]
     
-    # 3. RECALCUL STRICT DU STATUT SELON VOS NOUVEAUX SEUILS
-    # Cela écrase le statut du CSV pour garantir l'exactitude
+    # Recalcul strict
     df_recalc <- df_combined %>%
       mutate(Statut = case_when(
         Pred_Mean > limit_val ~ "ALERTE HAUTE",
@@ -168,14 +177,32 @@ server <- function(input, output, session) {
     return(df_recalc)
   })
   
-  # --- LÉGENDE DYNAMIQUE (UI) ---
+  # --- OBSERVATEUR POUR METTRE À JOUR LA LISTE DES STATIONS ---
+  # Se déclenche quand les données changent (changement de polluant ou de zone)
+  observe({
+    df <- filtered_full_data()
+    
+    if(nrow(df) > 0) {
+      # On récupère la liste unique des stations disponibles dans la sélection actuelle
+      stations_dispo <- sort(unique(df$Station))
+      
+      # On met à jour l'input. "selected = NULL" signifie qu'au début, rien n'est sélectionné (donc tout s'affiche)
+      updateSelectizeInput(session, "filter_stations", 
+                           choices = stations_dispo, 
+                           selected = NULL, 
+                           server = TRUE) 
+    } else {
+      updateSelectizeInput(session, "filter_stations", choices = NULL, selected = NULL)
+    }
+  })
+  
+  # --- LÉGENDE DYNAMIQUE ---
   output$dynamic_legend <- renderUI({
     curr_pol <- input$map_polluant
     limit_val <- THRESHOLDS[[curr_pol]]
     
     div(style="background:#fff; padding:15px; border:1px solid #ddd; border-radius:4px;",
         h5("Légende & Seuils"),
-        # Affichage du seuil actif
         div(style="background:#fee; color:#c0392b; padding:5px; border-radius:3px; margin-bottom:10px; font-weight:bold; text-align:center;",
             paste("Seuil", curr_pol, ":", limit_val, "µg/m³")
         ),
@@ -184,20 +211,19 @@ server <- function(input, output, session) {
         tags$div(tags$span(style="color:orange;font-size:1.2em;", "●"), " O3"),
         hr(),
         h5("Niveaux de Risque"),
-        tags$span(class="badge bg-danger", "HAUTE"), " Moyenne > Seuil", br(),
-        tags$span(class="badge bg-warning text-dark", "MOYENNE"), " Risque 80% > Seuil", br(),
-        tags$span(class="badge bg-info text-dark", "POSSIBLE"), " Risque 95% > Seuil"
+        tags$span(class="badge", style="background-color: #e74c3c;", "HAUTE"), " Moyenne > Seuil", br(),
+        tags$span(class="badge", style="background-color: #f39c12;", "MOYENNE"), " Risque 80% > Seuil", br(),
+        tags$span(class="badge text-dark", style="background-color: #f1c40f;", "POSSIBLE"), " Risque 95% > Seuil"
     )
   })
   
-  # --- DONNÉES CARTE (Heure H) ---
+  # --- CARTE ET MARQUEURS ---
   data_map_h <- reactive({
     df <- filtered_full_data()
     if(nrow(df) == 0) return(NULL)
     df %>% filter(Echeance_H == input$select_h)
   })
   
-  # --- CARTE ---
   output$maCarte <- renderLeaflet({
     leaf <- leaflet() %>% 
       addProviderTiles(providers$CartoDB.Positron) %>% 
@@ -217,7 +243,6 @@ server <- function(input, output, session) {
     if(!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
       col_pal <- switch(input$map_polluant, "PM2.5"="red", "NO2"="blue", "O3"="orange")
       
-      # POPUP RICHE
       popups <- paste0(
         "<div style='font-family:sans-serif;'>",
         "<h5 style='margin:0;color:#2c3e50;'>", df$Station, "</h5>",
@@ -249,20 +274,26 @@ server <- function(input, output, session) {
     h4(class = "text-center text-primary", style="font-weight:bold;", date_txt)
   })
   
-  # --- TABLEAU REGROUPÉ ---
+  # --- TABLEAU REGROUPÉ AVEC FILTRE STATION ---
   output$tab_alertes_grouped <- renderDT({
     df <- filtered_full_data()
     
-    if(nrow(df) == 0) return(datatable(data.frame(Message = "Données indisponibles (Fichiers manquants)"), options = list(dom='t'), rownames=F))
+    if(nrow(df) == 0) return(datatable(data.frame(Message = "Données indisponibles"), options = list(dom='t'), rownames=F))
     
-    # Filtrage basé sur le Statut RECALCULÉ
+    # 1. FILTRAGE PAR STATION (Si l'utilisateur a sélectionné quelque chose)
+    # Si input$filter_stations est NULL, on garde tout. Sinon, on filtre.
+    if (!is.null(input$filter_stations) && length(input$filter_stations) > 0) {
+      df <- df %>% filter(Station %in% input$filter_stations)
+    }
+    
+    # 2. Filtrage des alertes
     df_alert <- df %>% 
       filter(grepl("ALERTE", Statut)) %>%
       arrange(Station, Date_Prevue)
     
-    if(nrow(df_alert) == 0) return(datatable(data.frame(Message = "✅ Aucune alerte prévue."), options = list(dom='t'), rownames=F))
+    if(nrow(df_alert) == 0) return(datatable(data.frame(Message = "✅ Aucune alerte pour la sélection."), options = list(dom='t'), rownames=F))
     
-    # Algorithme de regroupement
+    # 3. Algorithme de regroupement
     df_grouped <- df_alert %>%
       group_by(Station, Statut, Typologie) %>%
       mutate(
