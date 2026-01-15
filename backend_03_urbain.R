@@ -119,7 +119,7 @@ process_station_worker <- function(station_name, data_full) {
     if (is.null(fit_garch_asym)) return(NULL)
     
     # Horizon 24h
-    horizon <- 24
+    horizon <- 48
     
     prev_sarima <- forecast(fit_sarima, h = horizon)
     pred_mean   <- as.numeric(prev_sarima$mean)
