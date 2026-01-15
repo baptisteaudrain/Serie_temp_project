@@ -17,7 +17,7 @@ df <- read.csv("mesure_horaire_view.csv")
 
 # PARAMÉTRAGE CIBLE : OZONE PÉRIURBAIN
 target_polluant <- "O3"
-target_typologies <- c("Périurbaine") # On cible spécifiquement le périurbain
+target_typologies <-  c("Périurbaine", "Rurale proche Zone Urbaine") # On cible spécifiquement le périurbain
 
 # Recherche de la station "Championne"
 championne_info <- df %>%
@@ -95,7 +95,7 @@ ggtsdisplay(ts_train, lag.max=60, main="GRAPHIQUE B : Série Brute O3 (ACF/PACF)
 # ETAPE 3-Bis : CHOIX DE LA DIFFÉRENCIATION (OZONE)
 # ==============================================================================
 library(forecast)
-library(ggplot2)12
+library(ggplot2)
 
 print("--- COMPARAISON DES DIFFÉRENCIATIONS (O3) ---")
 
@@ -125,23 +125,20 @@ print("--- SÉLECTION DU MODÈLE O3 (Sur Validation) ---")
 # On fixe la partie saisonnière à (0,1,1) car tu as vu le pic négatif à 24
 # On fixe d=1 car tu as choisi le scénario 2
 
-# 1. CANDIDAT AR(2) : Suggéré par ta PACF (Pics à 1 et 2)
-print("Entraînement AR(2)...")
-model_ar2 <- Arima(ts_train, order=c(2,1,0), seasonal=list(order=c(0,1,1), period=24))
+print("Entraînement AR(1)...")
+model_ar1 <- Arima(ts_train, order=c(1,1,0), seasonal=list(order=c(0,1,1), period=24))
 
-# 2. CANDIDAT MA(1) : Suggéré par ton ACF (Pic à 1)
 print("Entraînement MA(1)...")
 model_ma1 <- Arima(ts_train, order=c(0,1,1), seasonal=list(order=c(0,1,1), period=24))
 
-# 3. CANDIDAT MIXTE : AR(2) + MA(1) - La Totale
-print("Entraînement Mixte (2,1,1)...")
-model_mix <- Arima(ts_train, order=c(2,1,1), seasonal=list(order=c(0,1,1), period=24))
+print("Entraînement Mixte (1,1,1)...")
+model_mix <- Arima(ts_train, order=c(1,1,1), seasonal=list(order=c(0,1,1), period=24))
 
 # ------------------------------------------------------------------------------
 # A. Comparaison AIC (Théorique)
 # ------------------------------------------------------------------------------
 print("--- RÉSULTATS AIC (Plus bas = Mieux) ---")
-print(paste("AIC AR(2)      :", round(model_ar2$aic, 2)))
+print(paste("AIC AR(1)      :", round(model_ar1$aic, 2)))
 print(paste("AIC MA(1)      :", round(model_ma1$aic, 2)))
 print(paste("AIC Mixte      :", round(model_mix$aic, 2)))
 
@@ -157,31 +154,67 @@ get_rmse_val <- function(mod) {
   return(rmse(val_data, pred))
 }
 
-rmse_ar2  <- get_rmse_val(model_ar2)
+rmse_ar1  <- get_rmse_val(model_ar1)
 rmse_ma1  <- get_rmse_val(model_ma1)
 rmse_mix  <- get_rmse_val(model_mix)
 
-print(paste("RMSE Val - AR(2)   :", round(rmse_ar2, 2)))
+print(paste("RMSE Val - AR(1)   :", round(rmse_ar1, 2)))
 print(paste("RMSE Val - MA(1)   :", round(rmse_ma1, 2)))
 print(paste("RMSE Val - Mixte   :", round(rmse_mix, 2)))
 
 # ------------------------------------------------------------------------------
-# C. SÉLECTION AUTOMATIQUE
+# SÉLECTION INTELLIGENTE (Arbitrage RMSE vs AIC)
 # ------------------------------------------------------------------------------
-scores <- c(AR2=rmse_ar2, MA1=rmse_ma1, Mixte=rmse_mix)
-winner_name <- names(which.min(scores))
 
-print(paste(">>> LE VAINQUEUR O3 EST :", winner_name))
+# 1. On rassemble les scores dans un tableau propre
+df_scores <- data.frame(
+  Modele = c("MA1", "AR1", "Combo"),
+  RMSE   = c(rmse_ma1, rmse_ar1, rmse_mix),
+  AIC    = c(model_ma1$aic, model_ar1$aic, model_mix$aic)
+)
 
-if(winner_name == "AR2") {
-  best_model <- model_ar2
-  titre_model <- "SARIMA(2,1,0)(0,1,1)[24]"
+print("--- TABLEAU DES SCORES ---")
+print(df_scores)
+
+# 2. FONCTION DE DÉCISION
+# tolerance_pct : Si un modèle est à moins de X% du meilleur RMSE, 
+# on considère qu'il est "aussi bon" en prévision.
+select_smart_winner <- function(df, tolerance_pct = 0.02) { # 0.02 = 2% de tolérance
+  
+  # A. Trouver le meilleur RMSE absolu
+  best_rmse <- min(df$RMSE)
+  
+  # B. Seuil de tolérance (Best RMSE + 2%)
+  threshold <- best_rmse * (1 + tolerance_pct)
+  
+  # C. On garde les "Finalistes" (ceux qui sont sous le seuil)
+  candidates <- df[df$RMSE <= threshold, ]
+  
+  print(paste("--> Meilleur RMSE :", round(best_rmse, 4)))
+  print(paste("--> Seuil tolérance (2%) :", round(threshold, 4)))
+  print(paste("--> Modèles finalistes retenus pour l'AIC :", paste(candidates$Modele, collapse=", ")))
+  
+  # D. Parmi les finalistes, le vainqueur est celui avec le MINIMUM d'AIC
+  winner_row <- candidates[which.min(candidates$AIC), ]
+  
+  return(winner_row$Modele)
+}
+
+# 3. ÉLECTION
+winner_name <- select_smart_winner(df_scores, tolerance_pct = 0.02)
+
+print("==================================================")
+print(paste(">>> VAINQUEUR OFFICIEL :", winner_name))
+print("==================================================")
+if(winner_name == "AR1") {
+  best_model <- model_ar1
+  titre_model <- "SARIMA(1,1,0)(0,1,1)[24]"
 } else if(winner_name == "MA1") {
   best_model <- model_ma1
   titre_model <- "SARIMA(0,1,1)(0,1,1)[24]"
 } else {
   best_model <- model_mix
-  titre_model <- "SARIMA(2,1,1)(0,1,1)[24]"
+  titre_model <- "SARIMA(1,1,1)(0,1,1)[24]"
 }
 
 # Diagnostic résidus
@@ -191,7 +224,7 @@ checkresiduals(best_model)
 
 
 # ==============================================================================
-# FINAL O3 : VALIDATION ROBUSTE (SARIMA(2,1,1) + GARCH + ROLLING 48H)
+# FINAL O3 : VALIDATION ROBUSTE 
 # ==============================================================================
 library(forecast)
 library(rugarch)
@@ -202,8 +235,8 @@ print("--- ETAPE FINALE O3 : Modélisation Hybride & Validation ---")
 
 # 1. DÉFINITION DU VAINQUEUR (Mixte)
 # ----------------------------------
-# Issu de ton test précédent : ARIMA(2,1,1)(0,1,1)[24]
-best_order <- c(2, 1, 1)
+
+best_order <- c(1, 1, 0)
 best_seas  <- c(0, 1, 1)
 
 print("Ré-entraînement du champion SARIMA sur le Train...")
@@ -313,9 +346,10 @@ ggplot(df_res, aes(x=Heure)) +
   scale_fill_manual(name = "Incertitude", values=c("Intervalle 95%"="orange", "Intervalle 80%"="#d35400")) +
   scale_color_manual(name = "Courbes", values=c("Réel (O3)"="#2980b9", "Prévision 48h"="#c0392b")) +
   
-  labs(title = "Validation 48h Ozone (Périurbain)",
-       subtitle = paste("RMSE Global :", round(rmse_final, 2), "µg/m³ - Modèle Hybride SARIMA(2,1,1) + GARCH"),
+  labs(title = paste( "Validation 48h Ozone ", titre_model, " + GARCH(1,1)"),
+       subtitle = paste("RMSE Global :", round(rmse_final, 2), "µg/m³ "),
        y = "Concentration O3 (µg/m³)",
        caption = "Recalage sur données réelles toutes les 48h") +
   theme_minimal() +
   theme(legend.position = "bottom")
+

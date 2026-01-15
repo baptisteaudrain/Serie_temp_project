@@ -10,6 +10,8 @@ library(forecast)
 library(ggplot2)
 library(Metrics)
 library(rugarch)
+library(rugarch)
+
 
 # 1. CHARGEMENT & PRÉPARATION
 # ---------------------------------------
@@ -20,7 +22,7 @@ target_polluant <- "NO2"
 
 # On garde les mêmes typologies pour comparer, ou on peut ajouter "Urbaine"
 # car le NO2 est souvent plus critique en ville.
-target_typologies <- c("Périurbaine", "Rurale proche Zone Urbaine", "Urbaine")
+target_typologies <- c("Périurbaine", "Rurale proche Zone Urbaine")
 
 # Recherche de la station "Championne" pour le NO2
 championne_info <- df %>%
@@ -177,11 +179,52 @@ print(paste("RMSE Val - Combiné :", round(rmse_combo, 2)))
 # ------------------------------------------------------------------------------
 # C. SÉLECTION AUTOMATIQUE DU VAINQUEUR
 # ------------------------------------------------------------------------------
-scores <- c(MA2=rmse_ma2, AR2=rmse_ar2, Combo=rmse_combo)
-winner_name <- names(which.min(scores))
+# ------------------------------------------------------------------------------
+# SÉLECTION INTELLIGENTE (Arbitrage RMSE vs AIC)
+# ------------------------------------------------------------------------------
 
-print(paste(">>> LE GRAND VAINQUEUR NO2 EST :", winner_name))
+# 1. On rassemble les scores dans un tableau propre
+df_scores <- data.frame(
+  Modele = c("MA2", "AR2", "Combo"),
+  RMSE   = c(rmse_ma2, rmse_ar2, rmse_combo),
+  AIC    = c(model_ma2$aic, model_ar2$aic, model_combo$aic)
+)
 
+print("--- TABLEAU DES SCORES ---")
+print(df_scores)
+
+# 2. FONCTION DE DÉCISION
+# tolerance_pct : Si un modèle est à moins de X% du meilleur RMSE, 
+# on considère qu'il est "aussi bon" en prévision.
+select_smart_winner <- function(df, tolerance_pct = 0.02) { # 0.02 = 2% de tolérance
+  
+  # A. Trouver le meilleur RMSE absolu
+  best_rmse <- min(df$RMSE)
+  
+  # B. Seuil de tolérance (Best RMSE + 2%)
+  threshold <- best_rmse * (1 + tolerance_pct)
+  
+  # C. On garde les "Finalistes" (ceux qui sont sous le seuil)
+  candidates <- df[df$RMSE <= threshold, ]
+  
+  print(paste("--> Meilleur RMSE :", round(best_rmse, 4)))
+  print(paste("--> Seuil tolérance (2%) :", round(threshold, 4)))
+  print(paste("--> Modèles finalistes retenus pour l'AIC :", paste(candidates$Modele, collapse=", ")))
+  
+  # D. Parmi les finalistes, le vainqueur est celui avec le MINIMUM d'AIC
+  winner_row <- candidates[which.min(candidates$AIC), ]
+  
+  return(winner_row$Modele)
+}
+
+# 3. ÉLECTION
+winner_name <- select_smart_winner(df_scores, tolerance_pct = 0.02)
+
+print("==================================================")
+print(paste(">>> VAINQUEUR OFFICIEL :", winner_name))
+print("==================================================")
+
+# 4. ASSIGNATION AUTOMATIQUE
 if(winner_name == "MA2") {
   best_model <- model_ma2
   titre_model <- "SARIMA(0,1,2)(0,1,1)[24]"
@@ -197,23 +240,17 @@ if(winner_name == "MA2") {
 checkresiduals(best_model)
 
 
-
-
-
 # ==============================================================================
 # FINAL NO2 : VALIDATION ROBUSTE (SARIMA COMPLEXE + GARCH)
 # Modèle retenu : SARIMA(2,1,2)(0,1,1)[24]
 # ==============================================================================
-library(forecast)
-library(rugarch)
-library(ggplot2)
-library(Metrics)
+
 
 print("--- ETAPE FINALE NO2 : Modélisation Hybride ---")
 
 # 1. DÉFINITION DU VAINQUEUR (Issu de ton tournoi)
 # ------------------------------------------------
-# C'est le ARMA(2,2) qui a gagné
+
 best_order <- c(2, 1, 2)
 best_seas  <- c(0, 1, 1)
 
@@ -348,9 +385,10 @@ ggplot(df_res, aes(x=Heure)) +
   scale_fill_manual(name = "Incertitude", values=c("Intervalle 95%"="orange", "Intervalle 80%"="#d35400")) +
   scale_color_manual(name = "Courbes", values=c("Réel (NO2)"="#2980b9", "Prévision 48h"="#c0392b")) +
   
-  labs(title = paste("Validation 48h NO2 : Recalage tous les 2 jours"),
+  labs(title = paste("Validation 48h NO2 :", titre_model , "+ GARCH(1,1)"),
        subtitle = paste("RMSE Global :", round(rmse_final, 2), "µg/m³"),
        y = "Concentration NO2 (µg/m³)",
        caption = "Les lignes verticales pointillées marquent le moment où le modèle reçoit les vraies données et se corrige.") +
   theme_minimal() +
   theme(legend.position = "bottom")
+

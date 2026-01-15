@@ -1,5 +1,6 @@
 # ==============================================================================
-# BACKEND 1 : PM2.5 (Périurbain) - VERSION PARALLÈLE (7 Cœurs)
+# BACKEND 1 : PM2.5 (Périurbain) - TIME MACHINE (2026-01-06 12:00:00)
+# Modèle : SARIMA(0,1,2)(0,1,1)[24] + GARCH(1,1) (Selon Validation Finale)
 # ==============================================================================
 library(dplyr)
 library(lubridate)
@@ -11,7 +12,11 @@ library(progressr)
 
 INPUT_FILE  <- "mesure_horaire_view.csv"
 OUTPUT_FILE <- "data_shiny_pm25_periurbain.csv"
-SEUIL_ALERTE <- 25 # Seuil OMS (Moyenne 24h, utilisé ici en indicatif horaire)
+SEUIL_ALERTE <- 25 # Seuil OMS (Moyenne 24h)
+
+# --- CONFIGURATION TIME MACHINE ---
+# On fige le temps pour la démo
+DATE_LIMITE_SIMU <- ymd_hms("2026-01-06 12:00:00")
 
 # 1. CONFIGURATION DU PARALLÉLISME
 # --------------------------------
@@ -24,8 +29,8 @@ plan(multisession, workers = n_cores)
 handlers(global = TRUE)
 handlers("txtprogressbar") 
 
-print(paste(">>> Mode PARALLÈLE activé sur", n_cores, "cœurs."))
-print(">>> Méthode : SARIMA(2,1,0) + GARCH")
+print(paste(">>> Mode Time Machine activé : Coupure au", DATE_LIMITE_SIMU))
+print(">>> Méthode : SARIMA(0,1,2) + GARCH")
 
 if (!file.exists(INPUT_FILE)) stop("Fichier source introuvable.")
 df <- read.csv(INPUT_FILE)
@@ -36,13 +41,21 @@ df_traite <- df %>%
   filter(nom_polluant == "PM2.5",
          typologie %in% c("Périurbaine", "Rurale proche Zone Urbaine")) %>%
   mutate(date_fin = ymd_hms(date_fin, quiet = TRUE)) %>%
-  filter(!is.na(date_fin))
+  filter(!is.na(date_fin)) %>%
+  
+  # === LA TIME MACHINE ===
+  filter(date_fin <= DATE_LIMITE_SIMU)
+# =======================
 
 stations_actives <- df_traite %>%
   group_by(nom_station) %>%
   summarise(derniere_mesure = max(date_fin, na.rm = TRUE)) %>%
   filter(derniere_mesure >= (max(df_traite$date_fin, na.rm=T) - days(3))) %>%
   pull(nom_station)
+
+print(paste("Nombre de stations PM2.5 actives au", DATE_LIMITE_SIMU, ":", length(stations_actives)))
+
+if (length(stations_actives) == 0) stop("ERREUR : Aucune station trouvée à cette date limite.")
 
 # 3. FONCTION DE TRAITEMENT
 # -------------------------
@@ -59,9 +72,9 @@ process_station_worker <- function(station_name, data_full) {
   res <- tryCatch({
     ts_data <- ts(valeurs_impute, frequency = 24)
     
-    # --- MODÈLE PM2.5 : SARIMA(2,1,0)(0,1,1) ---
-    # C'est le modèle validé dans ton rapport (AR2 Gagnant)
-    fit_sarima <- Arima(ts_data, order = c(2, 1, 0), 
+    # --- MODÈLE PM2.5 MIS À JOUR ---
+    # D'après ton image : SARIMA(0,1,2)(0,1,1)[24]
+    fit_sarima <- Arima(ts_data, order = c(0, 1, 2), 
                         seasonal = list(order = c(0, 1, 1), period = 24))
     
     residus <- residuals(fit_sarima)
@@ -75,40 +88,45 @@ process_station_worker <- function(station_name, data_full) {
     pred_mean <- as.numeric(forecast(fit_sarima, h = horizon)$mean)
     pred_sigma <- as.numeric(sigma(ugarchforecast(fit_garch, n.ahead = horizon)))
     
+    # Calcul des bornes de risque
+    vec_max_80 <- pred_mean + 1.28 * pred_sigma
+    vec_max_95 <- pred_mean + 1.96 * pred_sigma
+    
     data.frame(
       Station = station_name,
       Polluant = "PM2.5",
-      Typologie = "Périurbain", # Simplification pour l'affichage
+      Typologie = "Périurbain",
       Lat = df_s$y_wgs84[1],
       Lon = df_s$x_wgs84[1],
       Heure_Ref = last_time,
       Echeance_H = 1:horizon,
       Date_Prevue = last_time + hours(1:horizon),
+      
+      # Colonnes standardisées pour Shiny
       Pred_Mean = round(pmax(pred_mean, 0), 2),
-      Pred_Max  = round(pmax(pred_mean + 1.96 * pred_sigma, 0), 2)
+      Pred_Max_80 = round(pmax(vec_max_80, 0), 2),
+      Pred_Max_95 = round(pmax(vec_max_95, 0), 2)
     ) %>%
-      mutate(Statut = ifelse(Pred_Max > SEUIL_ALERTE, "ALERTE", "Normal"))
+      mutate(Statut = case_when(
+        Pred_Mean > SEUIL_ALERTE ~ "ALERTE HAUTE",
+        Pred_Max_80 > SEUIL_ALERTE ~ "ALERTE MOYENNE",
+        Pred_Max_95 > SEUIL_ALERTE ~ "ALERTE POSSIBLE",
+        TRUE ~ "Normal"
+      ))
     
   }, error = function(e) { return(NULL) })
   
   return(res)
 }
 
-# 4. EXÉCUTION AVEC BARRE DE PROGRESSION
-# ======================================
-n_total <- length(stations_actives)
-print(paste(">>> Démarrage du traitement pour", n_total, "stations PM2.5..."))
-
+# 4. EXÉCUTION
+# ============
 with_progress({
-  
   p <- progressor(along = stations_actives)
-  
   resultats_list <- future_lapply(stations_actives, function(st) {
-    
     res <- process_station_worker(st, df_traite)
     p(sprintf("Station : %s", st))
     return(res)
-    
   }, future.seed = TRUE)
 })
 

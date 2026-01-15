@@ -15,7 +15,7 @@ library(rugarch)
 # ---------------------------------------
 df <- read.csv("mesure_horaire_view.csv")
 target_polluant <- "PM2.5"
-target_typologies <- c("Périurbaine", "Rurale proche Zone Urbaine")
+target_typologies <-  c("Périurbaine", "Rurale proche Zone Urbaine")
 
 # Recherche championne
 championne_info <- df %>%
@@ -127,7 +127,7 @@ model_ma2 <- Arima(ts_train, order=c(0,1,2), seasonal=list(order=c(0,1,1), perio
 model_ar2 <- Arima(ts_train, order=c(2,1,0), seasonal=list(order=c(0,1,1), period=24))
 
 # 3. Le Mixte(1,1)
-model_mix <- Arima(ts_train, order=c(1,1,1), seasonal=list(order=c(0,1,1), period=24))
+model_mix <- Arima(ts_train, order=c(2,1,2), seasonal=list(order=c(0,1,1), period=24))
 
 # B. Comparaison AIC (Théorique - calculé sur le Train)
 print(paste("AIC MA(2)   :", round(model_ma2$aic, 2)))
@@ -145,18 +145,58 @@ get_rmse_val <- function(mod) {
   return(rmse(val_data, pred))
 }
 
-rmse_ma_val  <- get_rmse_val(model_ma2)
-rmse_ar_val  <- get_rmse_val(model_ar2)
-rmse_mix_val <- get_rmse_val(model_mix)
+rmse_ma <- get_rmse_val(model_ma2)
+rmse_ar  <- get_rmse_val(model_ar2)
+rmse_mix <- get_rmse_val(model_mix)
 
 print(paste("RMSE Val - MA(2)   :", round(rmse_ma_val, 2)))
 print(paste("RMSE Val - AR(2)   :", round(rmse_ar_val, 2)))
 print(paste("RMSE Val - Mixte   :", round(rmse_mix_val, 2)))
 
-# SÉLECTION AUTOMATIQUE DU VAINQUEUR
-scores <- c(MA2=rmse_ma_val, AR2=rmse_ar_val, Mixte=rmse_mix_val)
-winner_name <- names(which.min(scores))
-print(paste(">>> LE VAINQUEUR (élus sur Validation) EST :", winner_name))
+# ------------------------------------------------------------------------------
+# SÉLECTION INTELLIGENTE (Arbitrage RMSE vs AIC)
+# ------------------------------------------------------------------------------
+
+# 1. On rassemble les scores dans un tableau propre
+df_scores <- data.frame(
+  Modele = c("MA2", "AR2", "Combo"),
+  RMSE   = c(rmse_ma, rmse_ar, rmse_mix),
+  AIC    = c(model_ma2$aic, model_ar2$aic, model_mix$aic)
+)
+
+print("--- TABLEAU DES SCORES ---")
+print(df_scores)
+
+# 2. FONCTION DE DÉCISION
+# tolerance_pct : Si un modèle est à moins de X% du meilleur RMSE, 
+# on considère qu'il est "aussi bon" en prévision.
+select_smart_winner <- function(df, tolerance_pct = 0.02) { # 0.02 = 2% de tolérance
+  
+  # A. Trouver le meilleur RMSE absolu
+  best_rmse <- min(df$RMSE)
+  
+  # B. Seuil de tolérance (Best RMSE + 2%)
+  threshold <- best_rmse * (1 + tolerance_pct)
+  
+  # C. On garde les "Finalistes" (ceux qui sont sous le seuil)
+  candidates <- df[df$RMSE <= threshold, ]
+  
+  print(paste("--> Meilleur RMSE :", round(best_rmse, 4)))
+  print(paste("--> Seuil tolérance (2%) :", round(threshold, 4)))
+  print(paste("--> Modèles finalistes retenus pour l'AIC :", paste(candidates$Modele, collapse=", ")))
+  
+  # D. Parmi les finalistes, le vainqueur est celui avec le MINIMUM d'AIC
+  winner_row <- candidates[which.min(candidates$AIC), ]
+  
+  return(winner_row$Modele)
+}
+
+# 3. ÉLECTION
+winner_name <- select_smart_winner(df_scores, tolerance_pct = 0.02)
+
+print("==================================================")
+print(paste(">>> VAINQUEUR OFFICIEL :", winner_name))
+print("==================================================")
 
 # Assignation du meilleur modèle pour la suite
 if(winner_name == "MA2") {
@@ -321,3 +361,4 @@ ggplot(df_res, aes(x=Heure)) +
   
   theme_minimal() +
   theme(legend.position = "bottom")
+
