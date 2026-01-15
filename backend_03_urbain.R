@@ -18,7 +18,7 @@ library(progressr)
 # ----------------------------------------------------------------------
 INPUT_FILE   <- "mesure_horaire_view.csv"
 OUTPUT_FILE  <- "data_shiny_o3_urbain.csv"
-SEUIL_ALERTE <- 180    # µg/m³ O3
+SEUIL_ALERTE <- 120    # µg/m³ O3
 
 # --- CONFIGURATION TIME MACHINE ---
 DATE_LIMITE_SIMU <- ymd_hms("2026-01-06 12:00:00")

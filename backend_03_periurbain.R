@@ -12,7 +12,7 @@ library(progressr)
 
 INPUT_FILE   <- "mesure_horaire_view.csv"
 OUTPUT_FILE  <- "data_shiny_o3_periurbain.csv"
-SEUIL_ALERTE <- 180 
+SEUIL_ALERTE <- 120 
 
 # --- CONFIGURATION TIME MACHINE ---
 # On force le script à croire qu'on est à cette date précise.
@@ -36,13 +36,16 @@ df <- read.csv(INPUT_FILE)
 # -----------------------------------
 df_traite <- df %>%
   filter(nom_polluant == "O3") %>%
-  filter(grepl("Périurbain", typologie, ignore.case = TRUE)) %>% 
+  
+  # === CORRECTION TYPOLOGIES ===
+  # On applique exactement les mêmes que celles définies pour le périurbain
+  filter(typologie %in% c("Périurbaine", "Rurale proche Zone Urbaine")) %>%
+  
   mutate(date_fin = ymd_hms(date_fin, quiet = TRUE)) %>%
   filter(!is.na(date_fin)) %>%
   
-  # === LA LIGNE MAGIQUE ===
-  # On coupe tout ce qui dépasse la date limite
-  filter(date_fin <= DATE_LIMITE_SIMU) 
+  # === LA TIME MACHINE ===
+  filter(date_fin <= DATE_LIMITE_SIMU)
 # ========================
 
 stations_actives <- df_traite %>%
