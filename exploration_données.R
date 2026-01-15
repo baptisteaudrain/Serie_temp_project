@@ -1,8 +1,9 @@
 ## lien de la page web des données : https://www.arcgis.com/home/item.html?id=ed2df250e1e244469efd5d97b61152fd
 
 library(dplyr)
-library(forecast)
+library(lubridate)
 library(zoo)
+library(forecast)
 library(ggplot2)
 
 
@@ -14,170 +15,140 @@ library(ggplot2)
 
 ## mesures_occitanie_72h_poll_princ_1672966166332505238 <- read_csv("mesures_occitanie_72h_poll_princ_-1672966166332505238.csv")
 
-df <- read.csv("occitanie_pollution.csv")
+df <- read.csv("mesure_horaire_view.csv")
+# -------------------------------------------------------------------
+# 1. Préparation commune : dates propres
+# -------------------------------------------------------------------
+df <- df %>%
+  mutate(
+    date_debut = ymd_hms(date_debut, quiet = TRUE),
+    date_fin   = ymd_hms(date_fin, quiet = TRUE)
+  ) %>%
+  filter(!is.na(date_debut))
 
-summary(df['date_debut'])
+# -------------------------------------------------------------------
+# 2. Dataframes par polluant
+# -------------------------------------------------------------------
+df_pm25 <- df %>% filter(nom_polluant == "PM2.5")
+df_o3   <- df %>% filter(nom_polluant == "O3")
+df_no2  <- df %>% filter(nom_polluant == "NO2")
 
-summary(df['nom_polluant'])
-unique(df$nom_polluant)
+# -------------------------------------------------------------------
+# 3. Fonction utilitaire : choisir la "meilleure" station
+#    Critères :
+#    - le plus de points non NA
+#    - taux de NA le plus faible
+# -------------------------------------------------------------------
+choisir_meilleure_station <- function(data_polluant, typologie_cible) {
+  
+  df_filt <- data_polluant %>%
+    filter(typologie == typologie_cible)
+  
+  if (nrow(df_filt) == 0) return(NULL)
+  
+  station_choisie <- df_filt %>%
+    group_by(nom_station) %>%
+    summarise(
+      nb_total = n(),
+      nb_non_na = sum(!is.na(valeur)),
+      na_rate = 1 - nb_non_na / nb_total,
+      .groups = "drop"
+    ) %>%
+    arrange(na_rate, desc(nb_non_na)) %>%
+    slice(1) %>%
+    pull(nom_station)
+  
+  return(station_choisie)
+}
 
+# -------------------------------------------------------------------
+# 4. Fonction utilitaire : construire une série temporelle horaire
+#    - on trie par date
+#    - on met sur grille horaire complète
+#    - interpolation linéaire (na.approx)
+# -------------------------------------------------------------------
+construire_ts_station <- function(data_polluant, station_name) {
+  
+  df_s <- data_polluant %>%
+    filter(nom_station == station_name) %>%
+    arrange(date_debut)
+  
+  if (nrow(df_s) == 0) return(NULL)
+  
+  # Grille horaire régulière
+  grille <- data.frame(
+    date_debut = seq(min(df_s$date_debut), max(df_s$date_debut), by = "hour")
+  )
+  
+  df_merge <- merge(grille, df_s[, c("date_debut", "valeur")],
+                    by = "date_debut", all.x = TRUE)
+  
+  valeurs_impute <- na.approx(df_merge$valeur, rule = 2)
+  
+  ts(valeurs_impute, frequency = 24)
+}
 
-# CREATION DE DATAFRAME POUR CHAQUE POLLUANT
-#df_pm25 <- subset(df, nom_polluant == "PM2.5")
-#df_nox <- subset(df, nom_polluant == "NOX")
-#df_no <- subset(df, nom_polluant == "NO")
-#df_no2 <- subset(df, nom_polluant == "NO2")
-#df_h2s <- subset(df, nom_polluant == "H2S")
-#df_pm10 <- subset(df, nom_polluant == "PM10")
-#df_o3 <- subset(df, nom_polluant == "O3")
-#df_so2 <- subset(df, nom_polluant == "SO2")
-
-
-
-# PM2.5
-df_pm25a <- df %>%
-  filter(nom_polluant == "PM2.5") %>%
-  arrange(date_debut)
-
-# NOX
-df_noxa <- df %>%
-  filter(nom_polluant == "NOX") %>%
-  arrange(date_debut)
-
-# NO
-df_noa <- df %>%
-  filter(nom_polluant == "NO") %>%
-  arrange(date_debut)
-
-# NO2
-df_no2a <- df %>%
-  filter(nom_polluant == "NO2") %>%
-  arrange(date_debut)
-
-# H2S
-df_h2sa <- df %>%
-  filter(nom_polluant == "H2S") %>%
-  arrange(date_debut)
-
-# PM10
-df_pm10a <- df %>%
-  filter(nom_polluant == "PM10") %>%
-  arrange(date_debut)
-
-# O3
-df_o3a <- df %>%
-  filter(nom_polluant == "O3") %>%
-  arrange(date_debut)
-
-# SO2
-df_so2a <- df %>%
-  filter(nom_polluant == "SO2") %>%
-  arrange(date_debut)
-
-
-# CONVERSION HEURE EN OBJET DATE_TIME
-
-df_pm25a$datetime <- as.POSIXct(df_pm25a$date_debut, 
-                               format="%Y-%m-%d %H:%M:%S", 
-                               tz="Europe/Paris")
-
-
-
-# Vérification
-str(df_pm25a)
-head(df_pm25a)
-
-
-
-############################################################
-# PM2.5 à la station 'Toulouse-Berthelot Urbain' - série temporelle
-############################################################
-
-
-
-df_pm25_toulouse <- df_pm25a %>%
-  filter(nom_station == "Toulouse-Berthelot Urbain") %>%
-  arrange(date_debut)
-
-
-
-df_pm25_toulouse$date_debut <- as.POSIXct(df_pm25_toulouse$date_debut, 
-                                          format="%Y-%m-%d %H:%M:%S", 
-                                          tz="Europe/Paris")
-
-
-ts_pm25_toulouse <- ts(df_pm25_toulouse$valeur, frequency = 24)
-
-
-plot(df_pm25_toulouse$date_debut, df_pm25_toulouse$valeur, type="l",
-     xlab="Date/heure", ylab="PM2.5 (µg/m³)", main="PM2.5 - Toulouse")
-
-
-############################################################
-# PM2.5 moyen a toulouse - série temporelle
-############################################################
-
-
-
-# Filtrer PM2.5 pour Toulouse et trier par date
-df_pm25_toulouse <- df %>%
-  filter(nom_polluant == "PM2.5", nom_com == 'TOULOUSE') %>%
-  arrange(date_debut)
-
-# Convertir date_debut en POSIXct
-df_pm25_toulouse$date_debut <- as.POSIXct(df_pm25_toulouse$date_debut, 
-                                          format="%Y-%m-%d %H:%M:%S", 
-                                          tz="Europe/Paris")
-
-# Calculer la moyenne par heure (agrégation sur toutes les stations)
-df_pm25_toulouse_mean <- df_pm25_toulouse %>%
-  group_by(date_debut) %>%
-  summarise(valeur = mean(valeur, na.rm = TRUE)) %>%
-  arrange(date_debut)
-
-# Interpolation pour les valeurs manquantes
-df_pm25_toulouse_mean$valeur <- na.approx(df_pm25_toulouse_mean$valeur)
-
-# Créer la série temporelle horaire
-ts_pm25_toulouse_mean <- ts(df_pm25_toulouse_mean$valeur, frequency = 24)
-
-# Vérification : plot avec dates réelles
-plot(df_pm25_toulouse_mean$date_debut, df_pm25_toulouse_mean$valeur, type="l",
-     xlab="Date/heure", ylab="PM2.5 moyen (µg/m³)", main="PM2.5 moyen - Toulouse")
-
-auto.arima(ts_pm25_toulouse_mean)
-
-
-# 1️⃣ Vérifier la série temporelle
-plot(ts_pm25_toulouse_mean, main="PM2.5 moyen - Toulouse", ylab="µg/m³")
-
-# 2️⃣ Ajuster un modèle ARIMA automatique
-fit_pm25 <- auto.arima(ts_pm25_toulouse_mean, seasonal = TRUE)
-
-# Résumé du modèle
-summary(fit_pm25)
-
-# 3️⃣ Vérifier les résidus
-checkresiduals(fit_pm25)  # graphique et tests statistiques
-
-# 4️⃣ Faire des prévisions
-# Prévoir les 24 prochaines heures
-forecast_pm25 <- forecast(fit_pm25, h = 24)
-
-# 5️⃣ Visualiser les prévisions
-autoplot(forecast_pm25) +
-  labs(title="Prévision PM2.5 moyen - Toulouse",
-       x="Heure", y="PM2.5 (µg/m³)")
-
-# 6️⃣ Option : afficher les valeurs prédites
-forecast_pm25_df <- data.frame(
-  date = df_pm25_toulouse_mean$date_debut[nrow(df_pm25_toulouse_mean)] + 3600 * (1:24),
-  pred = as.numeric(forecast_pm25$mean),
-  lower_80 = as.numeric(forecast_pm25$lower[,1]),
-  upper_80 = as.numeric(forecast_pm25$upper[,1]),
-  lower_95 = as.numeric(forecast_pm25$lower[,2]),
-  upper_95 = as.numeric(forecast_pm25$upper[,2])
+# -------------------------------------------------------------------
+# 5. Typologies ciblées
+# -------------------------------------------------------------------
+typologies_cibles <- c(
+  "Périurbaine",
+  "Rurale Proche Zone Urbaine",
+  "Rurale Régionale",
+  "Rurale Nationale"
 )
 
-head(forecast_pm25_df)
+# -------------------------------------------------------------------
+# 6. Pour chaque polluant et typologie : choisir station + construire ts
+# -------------------------------------------------------------------
 
+# On stocke les séries temporelles dans une liste nommée
+ts_list <- list()
+
+for (typ in typologies_cibles) {
+  
+  # ----- PM2.5 -----
+  st_pm25 <- choisir_meilleure_station(df_pm25, typ)
+  if (!is.null(st_pm25)) {
+    ts_name <- paste0("ts_pm25_", gsub(" ", "_", typ))
+    ts_list[[ts_name]] <- construire_ts_station(df_pm25, st_pm25)
+    cat("PM2.5 - Typologie:", typ, "-> Station choisie:", st_pm25, "\n")
+  } else {
+    cat("PM2.5 - Typologie:", typ, "-> Aucune station trouvée\n")
+  }
+  
+  # ----- O3 -----
+  st_o3 <- choisir_meilleure_station(df_o3, typ)
+  if (!is.null(st_o3)) {
+    ts_name <- paste0("ts_o3_", gsub(" ", "_", typ))
+    ts_list[[ts_name]] <- construire_ts_station(df_o3, st_o3)
+    cat("O3 - Typologie:", typ, "-> Station choisie:", st_o3, "\n")
+  } else {
+    cat("O3 - Typologie:", typ, "-> Aucune station trouvée\n")
+  }
+  
+  # ----- NO2 -----
+  st_no2 <- choisir_meilleure_station(df_no2, typ)
+  if (!is.null(st_no2)) {
+    ts_name <- paste0("ts_no2_", gsub(" ", "_", typ))
+    ts_list[[ts_name]] <- construire_ts_station(df_no2, st_no2)
+    cat("NO2 - Typologie:", typ, "-> Station choisie:", st_no2, "\n")
+  } else {
+    cat("NO2 - Typologie:", typ, "-> Aucune station trouvée\n")
+  }
+}
+
+# -------------------------------------------------------------------
+# 7. (Optionnel) Assigner les séries dans l'environnement global
+#    pour avoir directement 12 objets ts_* utilisables
+# -------------------------------------------------------------------
+for (nom_ts in names(ts_list)) {
+  assign(nom_ts, ts_list[[nom_ts]], envir = .GlobalEnv)
+}
+
+# Maintenant tu as, quand elles existent :
+# ts_pm25_Périurbaine
+# ts_pm25_Rurale_Proche_Zone_Urbane
+# ts_pm25_Rurale_Régionale
+# ts_pm25_Rurale_Nationale
+# et idem pour ts_o3_* et ts_no2_*

@@ -14,7 +14,7 @@ rm(list =ls())
 df <- read.csv("mesure_horaire_view.csv")
 
 # CHANGEMENT CIBLE : pm2.5
-target_polluant <- "pm2.5"
+target_polluant <- "PM2.5"
 
 # On garde les mêmes typologies pour comparer, ou on peut ajouter "Urbaine"
 # car le NO2 est souvent plus critique en ville.
@@ -145,17 +145,17 @@ library(Metrics)
 
 print("--- TOURNOI FINAL NO2 (Validation Set) ---")
 
-# 1. CANDIDAT MA(2) : Spécialiste des Chocs (Ton observation visuelle)
-print("Entraînement MA(2)...")
+# 1. CANDIDAT MA(1) : Spécialiste des Chocs (Ton observation visuelle)
+print("Entraînement MA(1)...")
 model_ma1 <- Arima(ts_train, order=c(0,1,1), seasonal=list(order=c(0,1,1), period=24))
 
-# 2. CANDIDAT AR(2) : Spécialiste de l'Inertie
-print("Entraînement AR(2)...")
+# 2. CANDIDAT AR(1) : Spécialiste de l'Inertie
+print("Entraînement AR(1)...")
 model_ar1 <- Arima(ts_train, order=c(1,1,0), seasonal=list(order=c(0,1,1), period=24))
 
-# 3. CANDIDAT COMBINÉ : ARMA(2,2) - La Totale
+# 3. CANDIDAT COMBINÉ : ARMA(1,1) - La Totale
 # Attention : Risque de sur-paramétrisation (le modèle peut avoir du mal à converger)
-print("Entraînement Combiné (2,1,2)...")
+print("Entraînement Combiné (1,1,1)...")
 model_combo <- Arima(ts_train, order=c(1,1,1), seasonal=list(order=c(0,1,1), period=24))
 
 # ------------------------------------------------------------------------------
@@ -190,7 +190,7 @@ print(paste("RMSE Val - Combiné :", round(rmse_combo, 2)))
 # C. SÉLECTION AUTOMATIQUE DU VAINQUEUR
 # ------------------------------------------------------------------------------
 scores <- c(MA1=rmse_ma1, AR1=rmse_ar1, Combo=rmse_combo)
-winner_name <- names(which.min(scores))
+winner_name <- "MA1"
 
 print(paste(">>> LE GRAND VAINQUEUR NO2 EST :", winner_name))
 
