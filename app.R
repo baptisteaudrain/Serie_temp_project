@@ -62,13 +62,13 @@ load_data <- function(filename) {
 data_all <- list(
   PM2.5 = list(peri = load_data("data_shiny_pm25_periurbain.csv"), 
                urb  = load_data("data_shiny_pm25_urbain.csv"),
-               rur  = load_data("data_shiny_pm25_rurale.csv")),
+               rur  = load_data("data_shiny_pm25_rural.csv")),
   NO2   = list(peri = load_data("data_shiny_no2_periurbain.csv"), 
                urb  = load_data("data_shiny_no2_urbain.csv"), 
-               rur  = load_data("data_shiny_no2_rurale.csv")),
+               rur  = load_data("data_shiny_no2_rural.csv")),
   O3    = list(peri = load_data("data_shiny_o3_periurbain.csv"), 
                urb  = load_data("data_shiny_o3_urbain.csv"), 
-               rur  = load_data("data_shiny_o3_rurale.csv"))
+               rur  = load_data("data_shiny_o3_rural.csv"))
 )
 
 # Fonction Time Machine
