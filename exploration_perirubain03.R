@@ -10,6 +10,7 @@ library(forecast)
 library(ggplot2)
 library(Metrics)
 library(rugarch)
+library(tidyr)
 
 # 1. CHARGEMENT & PRÉPARATION
 # ---------------------------------------
@@ -84,9 +85,66 @@ print("--- ETAPE 3 : Diagnostic Visuel ---")
 fit_stl <- stl(ts_train, s.window="periodic")
 plot(fit_stl, main="GRAPHIQUE A : Décomposition STL (O3 Brut)")
 
+
+stl_df <- as.data.frame(fit_stl$time.series)
+# Renaming standard STL components to English
+colnames(stl_df) <- c("Seasonality", "Trend", "Remainder")
+
+# Adding Raw Data and Date
+stl_df$Raw_Data <- as.numeric(ts_train)
+stl_df$Date <- dates_totales[1:nrow(stl_df)]
+
+# 2. Zoom on a representative window (e.g., 15 days)
+# --------------------------------------------------
+periode_zoom <- stl_df %>%
+  filter(Date >= min(Date) & Date <= min(Date) + days(15))
+
+# 3. Reshaping for ggplot (Long Format)
+# -------------------------------------
+df_plot <- periode_zoom %>%
+  pivot_longer(cols = c("Raw_Data", "Seasonality", "Trend", "Remainder"),
+               names_to = "Component", values_to = "Value") %>%
+  # Force the order of facets: Raw Data first, then components
+  mutate(Component = factor(Component, levels = c("Raw_Data", "Seasonality", "Trend", "Remainder")))
+
+# 4. Plotting (English Labels)
+# ----------------------------
+ggplot(df_plot, aes(x = Date, y = Value, color = Component)) +
+  geom_line(size = 0.8) +
+  facet_grid(Component ~ ., scales = "free_y") + 
+  
+  theme_minimal() +
+  
+  # --- NOUVELLE PALETTE : DÉGRADÉ DE BLEUS ---
+  # On utilise des codes hexadécimaux pour un contrôle précis du dégradé,
+  # du plus foncé (Raw Data) au plus clair (Remainder).
+  scale_color_manual(values = c(
+    "Raw_Data"    = "#08306b", # Bleu nuit très foncé (Données brutes)
+    "Trend"       = "#2171b5", # Bleu foncé (Tendance)
+    "Seasonality" = "#4292c6", # Bleu moyen vif (Saisonnalité - bien visible)
+    "Remainder"   = "#9ecae1"  # Bleu clair grisé (Bruit de fond)
+  )) +
+  # -------------------------------------------
+
+labs(
+  title = "STL Decomposition: 15-Day Zoom (Ozone)",
+  subtitle = "Visual evidence of strong 24h Seasonality justifying seasonal differentiation",
+  x = "Date",
+  y = "Concentration (µg/m³)"
+) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 12, face = "bold", color = "#08306b"), # Titres des facettes en bleu foncé
+    plot.title = element_text(size = 14, face = "bold", color = "#08306b"),
+    plot.subtitle = element_text(size = 11, color = "#2171b5")
+  )
+
+
+
+
 # GRAPHIQUE B : ACF/PACF BRUT
 # Attends-toi à des vagues immenses sur l'ACF (Cycle jour/nuit)
-ggtsdisplay(ts_train, lag.max=60, main="GRAPHIQUE B : Série Brute O3 (ACF/PACF)")
+ggtsdisplay(ts_train, lag.max=60)
 
 
 
@@ -102,14 +160,12 @@ print("--- COMPARAISON DES DIFFÉRENCIATIONS (O3) ---")
 # SCÉNARIO 1 : Juste le nettoyage saisonnier (24h)
 # Pour l'Ozone, c'est souvent suffisant car il n'y a pas d'inertie "lourde" comme les particules
 ts_diff_saison <- diff(ts_train, lag=24)
-ggtsdisplay(ts_diff_saison, lag.max=60, 
-            main="SCENARIO 1 : Différenciation Saisonnière seule (D=1)")
+ggtsdisplay(ts_diff_saison, lag.max=60)
 
 # SCÉNARIO 2 : La Totale (24h + 1h)
 # Si le scénario 1 laisse des vagues, on teste celui-ci
 ts_double_diff <- diff(ts_diff_saison, lag=1)
-ggtsdisplay(ts_double_diff, lag.max=60, 
-            main="SCENARIO 2 : Double Différenciation (D=1 + d=1)")
+ggtsdisplay(ts_double_diff, lag.max=60)
 
 
 
@@ -264,6 +320,17 @@ spec_garch <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(
 fit_garch <- ugarchfit(spec = spec_garch, data = residus, solver = "solnp")
 print("GARCH ajusté.")
 
+
+
+# Une fois le fit_garch généré :
+print("--- Coefficients du GARCH(1,1) ---")
+matrice_coefs <- fit_garch@fit$matcoef
+print(matrice_coefs)
+
+# Astuce : Regardez la colonne "Pr(>|t|)". 
+# Si elle est < 0.05, le coefficient est significatif.
+# omega = constante, alpha1 = effet du choc passé (ARCH), beta1 = persistance (GARCH)
+
 # 3. SIMULATION FINALE (ROLLING FORECAST 48H)
 # ===========================================
 print("--- Lancement de la simulation 48h avec recalage ---")
@@ -332,24 +399,33 @@ df_res <- data.frame(
 lignes_recalage <- seq(horizon_appli, length(preds_mean)-1, by=horizon_appli)
 
 ggplot(df_res, aes(x=Heure)) +
-  # Incertitude
-  geom_ribbon(aes(ymin=Bas95, ymax=Haut95, fill="Intervalle 95%"), alpha=0.2) +
-  geom_ribbon(aes(ymin=Bas80, ymax=Haut80, fill="Intervalle 80%"), alpha=0.4) +
+  # Incertitude (Uncertainty) - Traduction des labels dans 'fill'
+  geom_ribbon(aes(ymin=Bas95, ymax=Haut95, fill="95% Confidence Interval"), alpha=0.2) +
+  geom_ribbon(aes(ymin=Bas80, ymax=Haut80, fill="80% Confidence Interval"), alpha=0.4) +
   
-  # Recalage
+  # Recalage (Refit lines)
   geom_vline(xintercept = lignes_recalage, linetype="dotted", color="black", alpha=0.5) +
   
-  # Courbes
-  geom_line(aes(y=Reel, color="Réel (O3)"), size=0.8) +
-  geom_line(aes(y=Pred, color="Prévision 48h"), linetype="dashed", size=0.8) +
+  # Courbes (Curves) - Traduction des labels dans 'color'
+  geom_line(aes(y=Reel, color="Actual (O3)"), size=0.8) +
+  geom_line(aes(y=Pred, color="48h Forecast"), linetype="dashed", size=0.8) +
   
-  scale_fill_manual(name = "Incertitude", values=c("Intervalle 95%"="orange", "Intervalle 80%"="#d35400")) +
-  scale_color_manual(name = "Courbes", values=c("Réel (O3)"="#2980b9", "Prévision 48h"="#c0392b")) +
+  # Définition manuelle des couleurs avec les noms anglais correspondants
+  scale_fill_manual(name = "Uncertainty", 
+                    values=c("95% Confidence Interval"="orange", 
+                             "80% Confidence Interval"="#d35400")) +
   
-  labs(title = paste( "Validation 48h Ozone ", titre_model, " + GARCH(1,1)"),
-       subtitle = paste("RMSE Global :", round(rmse_final, 2), "µg/m³ "),
-       y = "Concentration O3 (µg/m³)",
-       caption = "Recalage sur données réelles toutes les 48h") +
+  scale_color_manual(name = "Series", 
+                     values=c("Actual (O3)"="#2980b9", 
+                              "48h Forecast"="#c0392b")) +
+  
+  # Labels en anglais et suppression du titre
+  labs(title = NULL, # Pas de titre
+       subtitle = paste("Global RMSE:", round(rmse_final, 2), "µg/m³"),
+       x = "Hour",
+       y = "O3 Concentration (µg/m³)",
+       caption = "Model refit on actual data every 48h") +
+  
   theme_minimal() +
   theme(legend.position = "bottom")
 
