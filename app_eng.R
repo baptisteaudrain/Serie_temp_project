@@ -15,6 +15,7 @@ library(jsonlite)
 # ==============================================================================
 # 1. CONFIGURATION & SAFETY
 # ==============================================================================
+options(shiny.port = 4000)
 
 # --- STRICT THRESHOLDS DEFINITION ---
 THRESHOLDS <- list(
